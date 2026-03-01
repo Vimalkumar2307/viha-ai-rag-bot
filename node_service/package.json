@@ -1,0 +1,23 @@
+{
+  "name": "viha-bot-node-service",
+  "version": "2.2.0",
+  "description": "WhatsApp interface for Viha Bot",
+  "main": "core/vihaBot.js",
+  "scripts": {
+    "start": "node core/vihaBot.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-cron": "^4.2.1",
+    "pg": "^8.18.0",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
