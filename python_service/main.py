@@ -7,6 +7,9 @@ Run with: uvicorn main:app --host 0.0.0.0 --port 8000
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

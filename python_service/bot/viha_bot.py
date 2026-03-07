@@ -1,45 +1,23 @@
 """
-ProductionVihaBot — the public interface for the Viha WhatsApp AI bot.
-Wraps the LangGraph workflow and returns structured responses to api/chat.py.
+V2 ProductionVihaBot — Conversational sales assistant
+Wraps LangGraph and returns structured response to api/chat.py
 """
 
-from langchain_core.messages import AIMessage, HumanMessage
-
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from bot.graph import build_production_graph
-from bot.tools import format_timeline_display, build_handoff_reason
+import json
 
 
 class ProductionVihaBot:
-    """Production-grade bot — 9 nodes, 3 tools, Supabase persistence."""
 
     def __init__(self):
         self.graph = build_production_graph()
-        print("✅ ProductionVihaBot ready!")
-        print("   • 9 specialised nodes")
-        print("   • 3 tools (extract / timeline / search)")
-        print("   • Confirmation flow for ambiguous inputs")
-        print("   • Supabase persistence across restarts")
+        print("✅ V2 ProductionVihaBot ready — Conversational Sales Agent")
 
-    # ──────────────────────────────────────────────────────────────────────
     def chat(self, user_id: str, message: str) -> dict:
-        """
-        Process one customer message and return a structured response.
-
-        Returns a dict with keys:
-            reply               str | None
-            needs_handoff       bool
-            products            list | None
-            requirements_summary str | None   (for product images message)
-            customer_requirements dict | None  (for wife alert)
-            handoff_reason      str | None
-        """
-        
         config = {
             "configurable": {"thread_id": user_id},
-            "metadata": {
-                "customer_number": user_id,
-                "session": user_id
-            },
+            "metadata": {"customer_number": user_id},
             "tags": [f"customer:{user_id}"]
         }
 
@@ -48,102 +26,89 @@ class ProductionVihaBot:
         print(f"{'='*70}")
 
         try:
-            # Count messages before invocation so we can tell if bot replied
-            try:
-                before = len(self.graph.get_state(config).values.get("messages", []))
-            except Exception:
-                before = 0
-
             result = self.graph.invoke(
-                {"messages": [HumanMessage(content=message)], "user_id": user_id},
-                config,
+                {
+                    "messages":              [HumanMessage(content=message)],
+                    "user_id":               user_id,
+                    "needs_human_handoff":   False,
+                    "handoff_reason":        None,
+                    "products_to_send":      None,
+                    "requirements_summary":  None,
+                    "customer_requirements": None
+                },
+                config
             )
 
-            after          = len(result.get("messages", []))
-            new_count      = after - before
-            bot_replied    = new_count > 1          # we added 1 HumanMessage
+            # Debug — print all messages
+            all_messages = result.get("messages", [])
+            print(f"  📥 Total messages in state: {len(all_messages)}")
+            for m in all_messages:
+                mtype = type(m).__name__
+                content = str(getattr(m, 'content', ''))[:80]
+                print(f"     [{mtype}] {content}")
+
+            # Get latest AI message that has real text content
+            latest_reply = None
+            for m in reversed(all_messages):
+                if isinstance(m, AIMessage) and m.content and str(m.content).strip():
+                    # Skip if it only has tool_calls and empty content
+                    if str(m.content).strip():
+                        latest_reply = str(m.content).strip()
+                        break
+
+            print(f"  💬 Latest reply: {str(latest_reply)[:100] if latest_reply else 'NONE'}")
+
             needs_handoff  = result.get("needs_human_handoff", False)
-            current_stage  = result.get("current_stage", "")
+            products       = result.get("products_to_send")
+            handoff_reason = result.get("handoff_reason", "")
 
-            print(f"    📊 messages: {before} → {after}  bot_replied={bot_replied}")
+            # Clean reply
+            if latest_reply:
+                latest_reply = latest_reply.replace("[SEND_PRODUCT_IMAGES]", "").strip()
 
-            # Latest AI message (if any)
-            latest_reply = next(
-                (m.content for m in reversed(result.get("messages", [])) if isinstance(m, AIMessage)),
-                None,
-            )
-
-            req = result.get("requirements")
-
-            # ── SCENARIO A: Products + summary to send ────────────────────
-            if (bot_replied and
-                    latest_reply == "[SEND_PRODUCT_IMAGES_WITH_SUMMARY]" and
-                    needs_handoff):
-                products     = result.get("recommended_products", [])
-                summary      = result.get("conversation_history_summary", "")
-                handoff_text = build_handoff_reason(result.get("handoff_reason", ""), req)
-                print(f"    📸 Sending {len(products)} products with summary")
+            # Products found — send images
+            if products is not None and len(products) > 0:
+                print(f"  📸 Sending {len(products)} product images")
                 return {
                     "reply":                 "[SEND_PRODUCT_IMAGES_WITH_SUMMARY]",
                     "needs_handoff":         True,
                     "products":              products,
-                    "requirements_summary":  summary,
-                    "customer_requirements": _req_dict(req),
-                    "handoff_reason":        handoff_text,
+                    "requirements_summary":  latest_reply,
+                    "customer_requirements": self._extract_requirements(result),
+                    "handoff_reason":        "products_shown",
+                    "locked":                False
                 }
 
-            # ── SCENARIO B: Handoff, bot silent ──────────────────────────
-            if needs_handoff and current_stage == "handoff" and not bot_replied:
-                print("    🤐 Handoff active — bot silent")
-                handoff_text = build_handoff_reason(result.get("handoff_reason", ""), req, message)
-                return {
-                    "reply":                 None,
-                    "needs_handoff":         True,
-                    "products":              None,
-                    "customer_requirements": _req_dict(req),
-                    "handoff_reason":        handoff_text,
-                }
-
-            # ── SCENARIO C: Other handoff ─────────────────────────────────
+            # Handoff triggered
             if needs_handoff:
-                print("    🚨 Handoff — bot silent")
-                handoff_text = build_handoff_reason(result.get("handoff_reason", ""), req, message)
+                print(f"  🚨 Handoff: {handoff_reason}")
                 return {
-                    "reply":                 None,
+                    "reply":                 latest_reply,
                     "needs_handoff":         True,
                     "products":              None,
-                    "customer_requirements": _req_dict(req),
-                    "handoff_reason":        handoff_text,
+                    "customer_requirements": self._extract_requirements(result),
+                    "handoff_reason":        handoff_reason,
+                    "locked":                False
                 }
 
-            # ── SCENARIO D: Normal reply ──────────────────────────────────
-            if bot_replied and latest_reply:
-                print(f"    🤖 Bot reply: {latest_reply[:80]}{'...' if len(latest_reply) > 80 else ''}")
-                return {"reply": latest_reply, "needs_handoff": False, "products": None}
+            # Normal reply
+            return {
+                "reply":         latest_reply,
+                "needs_handoff": False,
+                "products":      None,
+                "locked":        False
+            }
 
-            # ── SCENARIO E: No reply, no handoff — failsafe ───────────────
-            return {"reply": None, "needs_handoff": True, "products": None}
-
-        except Exception as exc:
-            print(f"❌ ERROR: {exc}")
+        except Exception as e:
+            print(f"❌ ERROR: {e}")
             import traceback
             traceback.print_exc()
-            return {"reply": None, "needs_handoff": True, "products": None}
+            return {
+                "reply":         None,
+                "needs_handoff": True,
+                "products":      None,
+                "locked":        False
+            }
 
-
-# ── Private helpers ────────────────────────────────────────────────────────
-
-def _req_dict(req) -> dict | None:
-    """Serialise ExtractedRequirements to a plain dict for wife alerts."""
-    if not req:
-        return None
-    return {
-        "quantity":    req.quantity,
-        "budget":      req.budget_display,
-        "budget_range": (
-            f"₹{req.budget_min}-{req.budget_max}"
-            if req.budget_min is not None and req.budget_max is not None else None
-        ),
-        "timeline":    format_timeline_display(req.timeline) if req.timeline else None,
-        "location":    req.location,
-    }
+    def _extract_requirements(self, result: dict) -> dict | None:
+        return result.get("customer_requirements")

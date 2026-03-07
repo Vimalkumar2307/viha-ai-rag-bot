@@ -103,6 +103,10 @@ async def reset_conversation(request: LockRequest):
                 )
                 deleted_writes = cursor.rowcount
 
+                cursor.execute(
+                    "DELETE FROM checkpoint_blobs WHERE thread_id = %s", (user_id,)
+                )
+
                 # Delete lead entry so bot starts fresh
                 cursor.execute(
                     "DELETE FROM leads WHERE customer_number = %s", (user_id,)
