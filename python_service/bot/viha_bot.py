@@ -83,7 +83,7 @@ class ProductionVihaBot:
             if needs_handoff:
                 print(f"  🚨 Handoff: {handoff_reason}")
                 return {
-                    "reply":                 latest_reply,
+                    "reply":                 None,
                     "needs_handoff":         True,
                     "products":              None,
                     "customer_requirements": self._extract_requirements(result),
