@@ -230,10 +230,4 @@ Fast inference (< 3 seconds per response) with Llama 3.3 70B. Free tier sufficie
 
 ---
 
-## 👨‍💻 Developer
-
-Built by a .NET developer (8 years) transitioning into AI engineering.
-
-This is a real production system serving a real business — not a tutorial project.
-
 **Stack used:** LangGraph · LangChain · FastAPI · Groq · Supabase · Baileys · Node.js · Python
