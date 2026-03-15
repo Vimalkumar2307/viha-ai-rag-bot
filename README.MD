@@ -1,8 +1,8 @@
-# 🤖 Viha WhatsApp Lead Qualification Agent
+# 🤖 Viha WhatsApp AI Sales Assistant — V2 RAG Agent
 
-> A production-grade LangGraph agent that qualifies return gift leads on WhatsApp — collecting requirements, matching products, and handing off to humans at the right moment.
+> A production-grade conversational AI sales agent that qualifies return gift leads on WhatsApp — collecting requirements naturally, searching products semantically, and handing off to humans at the right moment.
 
-Built for **Viha Return Gifts**, a real Indian e-commerce business selling return gifts for weddings, functions and corporate events.
+Built for **Viha Return Gifts**, a real Indian business selling return gifts for weddings, baby showers, corporate events and functions in Chennai.
 
 ---
 
@@ -10,12 +10,12 @@ Built for **Viha Return Gifts**, a real Indian e-commerce business selling retur
 
 Customers message the WhatsApp number asking about return gifts. The AI agent:
 
-1. **Greets** the customer and asks for requirements
-2. **Extracts** quantity, budget, delivery location and event date from natural conversation
-3. **Validates** the timeline and urgency
-4. **Searches** the product catalogue for matching items
-5. **Sends product images** with a requirements summary
-6. **Hands off** to the human team to close the order
+1. **Greets** the customer warmly
+2. **Collects** all 4 required fields naturally — quantity, budget, delivery location and timeline
+3. **Never reveals prices** until all 4 fields are collected — filters out casual browsers
+4. **Searches semantically** using RAG (pgvector + Jina embeddings) to find best matching products
+5. **Sends product images** with name and price in caption — after requirement summary
+6. **Hands off silently** to the human team — no message to customer, just wife gets alerted
 7. **Stays silent** — bot never interferes after human takes over
 
 The result: wife/staff only speaks to **qualified leads** with full context already collected.
@@ -34,74 +34,147 @@ Node.js Service (Baileys)          ← WhatsApp Web connection
 Python Service (FastAPI)           ← REST API
         │
         ▼
-LangGraph Agent                    ← AI brain
-   ├── 7 Nodes
-   ├── 3 LangChain Tools
+LangGraph Conversational Agent     ← AI brain
+   ├── 1 Node (sales_agent)
+   ├── 6 LangChain Tools
    └── PostgreSQL Checkpointer     ← Conversation persistence
         │
         ▼
-Supabase (PostgreSQL)              ← Leads + auth + state
+Supabase (PostgreSQL + pgvector)   ← Leads + auth + state + embeddings
+        │
+        ▼
+Jina AI Embeddings API             ← Semantic search (768 dimensions)
+Groq (Llama 3.3 70B)               ← LLM inference
+Cloudinary                         ← Product image hosting
 ```
 
 ---
 
 ## 🧠 LangGraph Agent Design
 
-The agent uses a **stateful graph** with conditional routing:
+V2 uses a **single conversational agent node** replacing V1's multi-node pipeline.
+
+The key difference from V1: instead of routing messages through specialized nodes (greeting → intent → extraction → validation → search → recommendation), a single LLM agent with 6 tools handles the entire conversation freely.
 
 ```
-Entry Router
-    ├── New user      → Greeting Node
-    └── Returning     → Intent Classifier
-                            ├── Handoff (image/quick query)  → END
-                            └── Browse products
-                                    ↓
-                            Requirement Extraction
-                                    ↓
-                            Validation Router
-                            ├── Missing info  → Ask Confirmation → END
-                            └── All collected → Validation Node
-                                                      ↓
-                                              Product Search
-                                                      ↓
-                                              Recommendation → END
+Customer Message
+        │
+        ▼
+  sales_agent_node  ← Single LLM agent with 6 tools
+        │
+        ▼
+  LLM decides which tool to call based on context
+        │
+        ├── save_customer_requirements      ← capture partial info
+        ├── get_product_info                ← answer product questions
+        ├── get_all_products_summary        ← check availability
+        ├── check_minimum_order             ← validate quantity
+        ├── search_products_by_requirements ← RAG + SQL search
+        └── trigger_human_handoff           ← alert wife silently
+        │
+        ▼
+       END
 ```
 
-### Nodes
+### Agent Node
 
 | Node | Responsibility |
 |---|---|
-| `greeting_node` | First-time welcome message |
-| `intent_classifier_node` | Classify message — product inquiry, image, quick query, unhandleable |
-| `requirement_extraction_node` | Extract qty, budget, timeline, location from free text |
-| `ask_confirmation_node` | Ask for missing fields or confirm ambiguous values |
-| `validation_node` | Parse event date, calculate urgency level |
-| `product_search_node` | Query Supabase for matching products with pricing tiers |
-| `recommendation_node` | Format summary, trigger product image sending, handoff |
+| `sales_agent_node` | Single conversational agent — handles entire sales conversation, decides tool calls, collects requirements, shows products |
 
 ### Tools
 
 | Tool | What It Does |
 |---|---|
-| `extract_customer_requirements` | Regex + position-based extraction for qty, budget ranges, timeline, location |
-| `calculate_timeline_urgency` | Parse dates, validate future dates, assign urgency (critical/high/medium/low) |
-| `search_matching_products` | Query products + variants with quantity-based pricing tiers |
+| `get_product_info` | Fetch full product details, sizes and pricing tiers from DB |
+| `search_products_by_requirements` | RAG semantic search + SQL fallback by budget and quantity |
+| `get_all_products_summary` | Get catalog overview to answer availability questions |
+| `check_minimum_order` | Validate customer quantity against product minimum |
+| `trigger_human_handoff` | Signal silent handoff — only wife gets alerted |
+| `save_customer_requirements` | Capture partial requirements incrementally to state |
+
+---
+
+## 🔍 RAG Implementation
+
+V2 adds semantic product search using pgvector and Jina AI embeddings — the main technical addition over V1.
+
+```
+Product Embedding (one-time, run locally):
+  embed_products.py → Jina API → 768-dim vectors → product_embeddings table
+
+Search at runtime:
+  Customer query → Jina API → query vector
+                → pgvector cosine similarity
+                → top matching products
+                → filter by budget + quantity
+                → return ranked results
+                → SQL fallback if RAG returns empty
+```
+
+**Why Jina AI?**
+- Free tier: 1M tokens/month
+- No local model — saves ~400MB RAM on Render free tier
+- 768-dimension embeddings for high quality semantic matching
+
+**Why RAG over SQL-only?**
+
+V1 SQL search filters by exact budget and quantity — works well but cannot handle semantic queries like "eco friendly gifts" or "something traditional for south Indian wedding." V2 RAG matches customer intent to product descriptions semantically, returning relevant results even for vague queries.
+
+---
+
+## 💡 Key Business Logic
+
+**4 Fields Gate:**
+```
+Bot NEVER shows products or prices until ALL 4 collected:
+  ✓ Quantity    (how many pieces)
+  ✓ Budget      (price per piece)
+  ✓ Location    (delivery city)
+  ✓ Timeline    (when needed)
+
+Casual browsers who don't answer → no products shown
+Serious buyers who answer all 4  → products shown with prices ✅
+```
+
+**Natural Collection:**
+```
+Customer gives 2 fields → bot asks for missing 2 together (numbered list)
+Customer gives all 4    → bot immediately searches and shows products
+Never asks one field at a time
+```
+
+**Silent Handoff:**
+```
+After products shown → wife alerted with full requirements
+Customer says anything → bot stays completely silent
+No message to customer — seamless handoff
+```
 
 ---
 
 ## 📱 Human Handoff Flow
 
 ```
-Bot shows products
+Bot collects all 4 requirements
+        │
+        ▼
+Bot searches products (RAG + SQL)
+        │
+        ▼
+Bot sends requirements summary + product images with prices
+        │
+        ▼
+Bot silently alerts wife with full customer details
         │
         ▼
 Bot locks conversation (stays silent forever)
         │
         ▼
-Staff picks up bot phone → chats with customer directly
+Wife chats with customer directly from bot phone
         │
         ▼
-Admin commands from wife's phone:
+Admin commands from wife's personal number:
     RESET <number>   → Clear conversation, bot starts fresh
     UNLOCK <number>  → Re-enable bot for that customer
     LOCK <number>    → Manually silence bot
@@ -110,8 +183,6 @@ Admin commands from wife's phone:
 ---
 
 ## 📊 Admin Commands (Wife's Phone)
-
-Your wife manages everything via WhatsApp commands from her personal number:
 
 ```
 SUMMARY              → Today's business overview
@@ -144,12 +215,14 @@ UNLOCK 919942463672  → Re-enable bot
 | Technology | Usage |
 |---|---|
 | FastAPI | REST API |
-| LangGraph 0.2 | Agent state machine |
+| LangGraph 0.2 | Single conversational agent |
 | LangChain 0.3 | Tools, prompts, LLM integration |
-| Groq (Llama 3.3 70B) | LLM inference |
-| psycopg3 + psycopg-pool | PostgreSQL async connection |
-| Supabase PostgreSQL | Leads, checkpoints, auth |
-| python-dateutil | Timeline parsing |
+| Groq (Llama 3.3 70B) | LLM inference — fast, free tier |
+| Jina AI Embeddings API | Semantic search — no local model needed |
+| pgvector | Vector similarity search in PostgreSQL |
+| psycopg3 + psycopg-pool | PostgreSQL connection pooling |
+| Supabase PostgreSQL | Leads, checkpoints, auth, embeddings |
+| LangSmith | LLM tracing and observability |
 
 ### Node.js Service
 | Technology | Usage |
@@ -167,37 +240,38 @@ UNLOCK 919942463672  → Re-enable bot
 ```
 ├── node_service/
 │   ├── core/
-│   │   ├── vihaBot.js           ← Main WhatsApp client
-│   │   ├── authStateSupabase.js ← Session persistence
+│   │   ├── vihaBot.js           ← Main WhatsApp client + message batching
+│   │   ├── authStateSupabase.js ← Session persistence in Supabase
 │   │   ├── llmClient.js         ← Python API client
-│   │   └── webInterface.js      ← Express server
+│   │   └── webInterface.js      ← Express server + status page
 │   ├── commands/
 │   │   └── adminCommands.js     ← All admin command handlers
 │   ├── jobs/
 │   │   └── scheduledJobs.js     ← Cron reports
 │   └── utils/
-│       ├── messageHelper.js     ← Send text/images/alerts
+│       ├── messageHelper.js     ← Send text/images/alerts to WhatsApp
 │       └── dateHelper.js        ← Date range parser
 │
 └── python_service/
     ├── bot/
-    │   ├── config.py            ← LLM setup
-    │   ├── cities.py            ← Known cities for extraction
-    │   ├── tools.py             ← 3 LangChain tools
-    │   ├── nodes.py             ← 7 LangGraph nodes
-    │   ├── graph.py             ← Graph assembly + checkpointer
-    │   └── viha_bot.py          ← Public bot interface
+    │   ├── config.py            ← LLM (Groq) setup
+    │   ├── tools.py             ← 6 LangChain tools
+    │   ├── nodes.py             ← Sales agent node + system prompt
+    │   ├── graph.py             ← LangGraph assembly + checkpointer
+    │   └── complete_bot.py      ← Public bot interface
     ├── api/
     │   ├── chat.py              ← POST /chat
     │   ├── conversations.py     ← Lock/unlock/reset
     │   ├── leads.py             ← Leads endpoints
     │   └── analytics.py        ← Summary/pending/followup/hotleads
     ├── services/
+    │   ├── rag_service.py       ← Jina embeddings + pgvector search
     │   ├── lead_service.py      ← Save/update leads
     │   └── lock_service.py      ← Conversation lock management
     ├── models/
-    │   ├── bot_models.py        ← LangGraph state + Pydantic models
-    │   └── schemas.py           ← API request/response models
+    │   └── bot_models.py        ← LangGraph state + Pydantic models
+    ├── scripts/
+    │   └── embed_products.py    ← One-time product embedding script
     └── main.py                  ← FastAPI app entry point
 ```
 
@@ -205,29 +279,71 @@ UNLOCK 919942463672  → Re-enable bot
 
 ## 🚀 Deployment
 
-Both services deployed on **Render** (free tier):
+Both services deployed on **Render**:
 
 - Node service — always-on WhatsApp connection
-- Python service — FastAPI with auto-scaling
-- Database — Supabase PostgreSQL (free tier)
+- Python service — FastAPI REST API
+- Database — Supabase PostgreSQL with pgvector extension
 - Auth persistence — WhatsApp session saved to Supabase (survives restarts)
+- Keep-alive — UptimeRobot pings health endpoints every 5 minutes
+
+---
+
+## 📈 V1 vs V2 Comparison
+
+| Feature | V1 | V2 |
+|---|---|---|
+| Agent architecture | Multiple specialized nodes in fixed pipeline | Single conversational agent node |
+| Product search | SQL filters only | RAG semantic search + SQL fallback |
+| Semantic queries | Not supported | Supported via pgvector + Jina AI |
+| Embeddings | None | 768-dim Jina embeddings in pgvector |
+| Unexpected message formats | May misroute in pipeline | LLM handles naturally |
+| 4 fields gate | ✅ | ✅ |
+| Silent handoff | ✅ | ✅ |
+| Price hidden until qualified | ✅ | ✅ |
+| Observability | None | LangSmith tracing |
+| RAM usage | ~150MB | ~150MB (Jina API, no local model) |
 
 ---
 
 ## 💡 Key Design Decisions
 
-**Why LangGraph?**
-Stateful conversations need more than a simple chain. LangGraph allows conditional routing, persistent state across messages, and clean separation of concerns into nodes.
+**Why single agent node instead of multi-node pipeline?**
+V1 routes every message through a fixed sequence of specialized nodes regardless of context — greeting → intent → extraction → validation → search → recommendation. This works well for standard flows but adds latency (multiple LLM calls per turn) and is harder to maintain as business logic grows. A single conversational agent with tools handles the entire conversation in one LLM call, decides freely which tool to use based on context, and is easier to update by modifying the system prompt.
+
+**Why RAG instead of SQL-only search?**
+SQL filters work well for exact budget and quantity matching. But customers often describe needs vaguely — "eco friendly", "something traditional", "good for south Indian wedding." RAG matches these semantic queries to product descriptions, returning relevant results that SQL would miss.
+
+**Why Jina AI instead of local sentence-transformers?**
+Local sentence-transformers model uses ~400MB RAM — exceeds Render free tier 512MB limit causing OOM crashes. Jina API has no local model, keeps RAM at ~150MB, and provides free 1M tokens/month.
+
+**Why gate products behind 4 fields?**
+Based on 1.5 years of real business experience — casual enquirers who don't share requirements rarely convert. Gating product images behind 4 fields ensures wife only follows up with qualified leads who have real buying intent.
 
 **Why two services?**
 Node.js handles WhatsApp (Baileys requires Node). Python handles AI (LangChain/LangGraph ecosystem). Clean separation with HTTP between them.
 
-**Why human handoff instead of full automation?**
-Return gifts are a trust-based purchase. Customers want to speak to a real person before ordering. The bot handles the tedious data collection — humans handle the relationship.
-
 **Why Groq?**
-Fast inference (< 3 seconds per response) with Llama 3.3 70B. Free tier sufficient for current volume.
+Fast inference (under 3 seconds per response) with Llama 3.3 70B. Free tier sufficient for current volume.
 
 ---
 
-**Stack used:** LangGraph · LangChain · FastAPI · Groq · Supabase · Baileys · Node.js · Python
+**Stack used:** LangGraph · LangChain · FastAPI · Groq · Jina AI · pgvector · Supabase · Baileys · Node.js · Python
+
+---
+
+## 🔄 Why V2? — The Switch from V1
+
+V1 worked well in production but had one limitation that grew over time:
+
+**SQL search only matched exact budget and quantity.**
+
+When the product catalogue was small (9 products), SQL filters were enough. But as the business grows, customers describe needs vaguely — *"something eco friendly"*, *"traditional for Tamil wedding"*, *"unique gifts under 50"*. SQL cannot answer these. It either returns nothing or returns wrong products.
+
+**V2 adds semantic understanding to product search.**
+
+Every product is embedded as a 768-dimension vector using Jina AI. When a customer describes their need, the query is embedded the same way and compared against all products using cosine similarity in pgvector. The result: products are ranked by how well they match the customer's intent — not just their price.
+
+The single agent architecture is a secondary benefit — it simplifies the codebase, reduces LLM calls per turn, and makes the system prompt the single source of truth for all business logic.
+
+**In short:** V1 = rule-based product matching. V2 = intent-based product matching.
