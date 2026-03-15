@@ -334,16 +334,22 @@ Fast inference (under 3 seconds per response) with Llama 3.3 70B. Free tier suff
 
 ## 🔄 Why V2? — The Switch from V1
 
-V1 worked well in production but had one limitation that grew over time:
+V1 worked well in production. The conversation flow, 4 fields collection, silent handoff and admin commands all worked correctly.
 
-**SQL search only matched exact budget and quantity.**
+**The only limitation was product search.**
 
-When the product catalogue was small (9 products), SQL filters were enough. But as the business grows, customers describe needs vaguely — *"something eco friendly"*, *"traditional for Tamil wedding"*, *"unique gifts under 50"*. SQL cannot answer these. It either returns nothing or returns wrong products.
+V1 used SQL filters — matches products by exact budget and quantity. This works perfectly for straightforward queries. But as the catalogue grows, customers describe needs vaguely:
 
-**V2 adds semantic understanding to product search.**
+- *"Something eco friendly"*
+- *"Traditional gifts for Tamil wedding"*
+- *"Unique and different under 50 rupees"*
 
-Every product is embedded as a 768-dimension vector using Jina AI. When a customer describes their need, the query is embedded the same way and compared against all products using cosine similarity in pgvector. The result: products are ranked by how well they match the customer's intent — not just their price.
+SQL cannot handle these. It either returns nothing or ignores the semantic intent entirely.
 
-The single agent architecture is a secondary benefit — it simplifies the codebase, reduces LLM calls per turn, and makes the system prompt the single source of truth for all business logic.
+**V2 adds RAG — semantic product search using pgvector and Jina AI embeddings.**
 
-**In short:** V1 = rule-based product matching. V2 = intent-based product matching.
+Every product is embedded as a 768-dimension vector. When a customer describes their need, the query is embedded the same way and compared against all products using cosine similarity. Products are ranked by how well they match the customer's intent — not just their price and quantity.
+
+The single conversational agent is a secondary architectural simplification — same business logic, cleaner codebase.
+
+**In short:** V1 = price and quantity matching. V2 = intent and meaning matching.
