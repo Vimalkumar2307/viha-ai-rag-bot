@@ -1,24 +1,34 @@
 import os
-import numpy as np
-from sentence_transformers import SentenceTransformer
+import requests
 from db.connection import get_db_connection
-
-# Lazy load — model loads on first use, not at startup
-_model = None
-
-def _get_model():
-    global _model
-    if _model is None:
-        print("⏳ Loading sentence transformer model...")
-        _model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("✅ Sentence transformer model loaded")
-    return _model
 
 
 def generate_embedding(text: str) -> list[float]:
-    model = _get_model()
-    embedding = model.encode(text, normalize_embeddings=True)
-    return embedding.tolist()
+    """
+    Generate embedding via Jina AI API.
+    Free tier: 1M tokens/month.
+    No local model — saves ~400MB RAM.
+    """
+    api_key = os.getenv("JINA_API_KEY")
+    if not api_key:
+        raise ValueError("JINA_API_KEY not set")
+
+    response = requests.post(
+        "https://api.jina.ai/v1/embeddings",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "input": [text],
+            "model": "jina-embeddings-v2-base-en"
+        }
+    )
+
+    if response.status_code != 200:
+        raise ValueError(f"Jina API error: {response.status_code} {response.text}")
+
+    return response.json()["data"][0]["embedding"]
 
 
 def build_product_text(product: dict) -> str:
