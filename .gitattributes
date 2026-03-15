@@ -1,2 +1,2 @@
-*.json linguist-detectable=false
-*.json linguist-language=JSON
+*.py linguist-language=Python
+*.js linguist-detectable=false
